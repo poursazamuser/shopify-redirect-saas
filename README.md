@@ -1,36 +1,104 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# ShopBridge – Shopify Redirect SaaS
 
-## Getting Started
+Redirige automatiquement les clients de la boutique A vers le checkout de la boutique B, avec mapping de variantes et tracking complet.
 
-First, run the development server:
+## Stack
+- **Next.js 15** (App Router, TypeScript)
+- **Supabase** (PostgreSQL)
+- **Railway** (hébergement)
+- **Tailwind CSS**
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+## Structure du projet
+
+```
+shopify-redirect-saas/
+├── schema.sql                          ← Schéma SQL complet à exécuter dans Supabase
+├── .env.local                          ← Variables d'environnement (à configurer)
+├── middleware.ts                       ← Protection des routes
+├── lib/
+│   ├── supabase.ts                     ← Clients Supabase (public + admin)
+│   └── auth.ts                         ← JWT sign/verify/session
+├── app/
+│   ├── layout.tsx
+│   ├── globals.css
+│   ├── page.tsx                        ← Redirect / → /dashboard ou /login
+│   ├── login/page.tsx                  ← Connexion + inscription
+│   ├── setup/page.tsx                  ← Connexion des 2 boutiques
+│   ├── mappings/page.tsx               ← Mapping produits A ↔ B
+│   ├── dashboard/
+│   │   ├── page.tsx                    ← Stats (server component)
+│   │   └── client.tsx                  ← Tables redirections + ventes
+│   └── api/
+│       ├── auth/
+│       │   ├── login/route.ts
+│       │   ├── register/route.ts
+│       │   └── logout/route.ts
+│       ├── shops/route.ts              ← GET/POST boutiques
+│       ├── products/sync/route.ts      ← GET/POST synchronisation produits
+│       ├── mappings/
+│       │   ├── route.ts                ← GET/POST mappings
+│       │   └── [id]/route.ts           ← DELETE mapping
+│       ├── redirect/route.ts           ← POST redirection (appelé par script.js)
+│       ├── script.js/route.ts          ← GET script intercepteur JS
+│       └── webhooks/shopify/
+│           └── order-paid/route.ts     ← POST webhook Shopify orders/paid
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Installation
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### 1. Base de données Supabase
+1. Créer un projet sur [supabase.com](https://supabase.com)
+2. Aller dans **SQL Editor** et exécuter le contenu de `schema.sql`
+3. Récupérer les clés API dans Settings → API
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### 2. Variables d'environnement
+Copier `.env.local` et remplir toutes les valeurs :
 
-## Learn More
+```bash
+cp .env.local .env.local   # déjà créé, juste remplir les valeurs
+```
 
-To learn more about Next.js, take a look at the following resources:
+### 3. Lancer en développement
+```bash
+npm install
+npm run dev
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### 4. Déploiement Railway
+1. Créer un projet Railway depuis ce repo Git
+2. Ajouter les variables d'environnement dans Railway → Variables
+3. Railway détecte automatiquement Next.js et build/deploy
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Flux complet
 
-## Deploy on Vercel
+```
+Client boutique A
+    ↓ clic "Passer au paiement"
+script.js intercepte
+    ↓ GET /cart.js (Shopify Ajax)
+    ↓ POST /api/redirect { items, shop_domain }
+        ↓ Lookup mappings en DB
+        ↓ POST /admin/api/2024-01/checkouts.json sur boutique B
+    ↓ Retourne checkoutUrl
+Client redirigé vers checkout boutique B
+    ↓ Paiement effectué
+Shopify B déclenche webhook orders/paid
+    ↓ POST /api/webhooks/shopify/order-paid
+        ↓ Vérification HMAC
+        ↓ INSERT orders
+        ↓ UPDATE redirections SET status = 'completed'
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Installation script sur boutique A
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Ajouter dans `theme.liquid` avant `</body>` :
+
+```html
+<script src="https://VOTRE_APP.railway.app/api/script.js?shop={{ shop.permanent_domain }}" defer></script>
+```
+
+## Webhook Shopify (boutique B)
+
+1. Admin boutique B → Settings → Notifications → Webhooks
+2. Créer : **Order payment** → `https://VOTRE_APP.railway.app/api/webhooks/shopify/order-paid`
+3. Copier la **Webhook signing secret** → `SHOPIFY_WEBHOOK_SECRET`

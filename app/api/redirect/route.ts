@@ -1,10 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
-import { getAccessToken } from '@/lib/shopify'
-
-// ── CORS helpers ──────────────────────────────────────────────────────────────
-// Le script est chargé sur une boutique Shopify (domaine externe) et appelle
-// notre API depuis le navigateur → Cross-Origin → headers CORS obligatoires.
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -12,12 +7,10 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Headers': 'Content-Type',
 }
 
-// Préflight CORS (navigateur envoie OPTIONS avant le POST)
 export async function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: CORS_HEADERS })
 }
 
-// POST /api/redirect – Appelé par le script JS de la boutique A
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
@@ -38,7 +31,6 @@ export async function POST(req: NextRequest) {
       .replace(/\/$/, '')
       .toLowerCase()
 
-    // Trouver la boutique source
     const { data: sourceShop } = await supabaseAdmin
       .from('shops')
       .select('id, user_id')
@@ -54,10 +46,9 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // Trouver la boutique destination avec ses credentials
     const { data: destShop } = await supabaseAdmin
       .from('shops')
-      .select('id, shop_domain, client_id, client_secret')
+      .select('id, shop_domain')
       .eq('user_id', sourceShop.user_id)
       .eq('role', 'destination')
       .single()
@@ -69,7 +60,6 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // Mapper les variantes source → destination
     const sourceVariantIds = items.map(i => String(i.variant_id))
     const { data: mappings } = await supabaseAdmin
       .from('product_mappings')
@@ -92,7 +82,7 @@ export async function POST(req: NextRequest) {
     const destItems = items
       .filter(i => mappingDict[String(i.variant_id)])
       .map(i => ({
-        variant_id: parseInt(mappingDict[String(i.variant_id)], 10),
+        variant_id: mappingDict[String(i.variant_id)],
         quantity: i.quantity,
       }))
 
@@ -103,64 +93,24 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // Token frais pour la boutique destination
-    const token = await getAccessToken(
-      destShop.shop_domain,
-      destShop.client_id,
-      destShop.client_secret
-    )
+    // Permalien panier Shopify — aucune API nécessaire
+    const cartPath = destItems
+      .map(i => `${i.variant_id}:${i.quantity}`)
+      .join(',')
 
-    if (!token) {
-      return NextResponse.json(
-        { error: 'Impossible de s\'authentifier sur la boutique destination' },
-        { status: 502, headers: CORS_HEADERS }
-      )
-    }
+    const checkoutUrl = `https://${destShop.shop_domain}/cart/${cartPath}`
 
-    // Créer le checkout sur la boutique B
-    const checkoutRes = await fetch(
-      `https://${destShop.shop_domain}/admin/api/2024-01/checkouts.json`,
-      {
-        method: 'POST',
-        headers: {
-          'X-Shopify-Access-Token': token,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ checkout: { line_items: destItems } }),
-      }
-    )
-
-    if (!checkoutRes.ok) {
-      const errText = await checkoutRes.text()
-      console.error('[Redirect] Checkout creation failed:', checkoutRes.status, errText)
-      return NextResponse.json(
-        { error: 'Erreur création checkout Shopify' },
-        { status: 502, headers: CORS_HEADERS }
-      )
-    }
-
-    const checkoutData = await checkoutRes.json()
-    const checkout = checkoutData.checkout
-
-    if (!checkout?.web_url) {
-      return NextResponse.json(
-        { error: 'URL de checkout non reçue' },
-        { status: 502, headers: CORS_HEADERS }
-      )
-    }
-
-    // Enregistrer la redirection
     await supabaseAdmin.from('redirections').insert({
       user_id: sourceShop.user_id,
       items_source: items,
       items_destination: destItems,
-      checkout_url: checkout.web_url,
-      checkout_token: checkout.token ?? null,
+      checkout_url: checkoutUrl,
+      checkout_token: null,
       status: 'pending',
     })
 
     return NextResponse.json(
-      { checkoutUrl: checkout.web_url },
+      { checkoutUrl },
       { headers: CORS_HEADERS }
     )
   } catch (err) {

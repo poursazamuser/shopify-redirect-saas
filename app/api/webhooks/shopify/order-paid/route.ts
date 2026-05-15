@@ -2,20 +2,21 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createHmac, timingSafeEqual } from 'crypto'
 import { supabaseAdmin } from '@/lib/supabase'
 
-// POST /api/webhooks/shopify/order-paid
-// Shopify sends this when an order is paid on the destination store
 export async function POST(req: NextRequest) {
   try {
     const rawBody = await req.text()
     const hmacHeader = req.headers.get('x-shopify-hmac-sha256') || ''
     const shopDomain = req.headers.get('x-shopify-shop-domain') || ''
 
-    // ── HMAC Verification ──────────────────────────────────────────────────────
     const secret = process.env.SHOPIFY_WEBHOOK_SECRET || ''
     if (!secret) {
-      console.warn('SHOPIFY_WEBHOOK_SECRET not set — skipping verification in dev')
+      console.warn('SHOPIFY_WEBHOOK_SECRET not set')
     } else {
-      const digest = createHmac('sha256', secret)
+      const secretKey = secret.match(/^[0-9a-f]{64}$/i)
+        ? Buffer.from(secret, 'hex')
+        : secret
+
+      const digest = createHmac('sha256', secretKey)
         .update(rawBody, 'utf8')
         .digest('base64')
 
@@ -26,14 +27,14 @@ export async function POST(req: NextRequest) {
         hmacBuffer.length !== digestBuffer.length ||
         !timingSafeEqual(hmacBuffer, digestBuffer)
       ) {
-        console.error('Invalid webhook HMAC signature')
+        console.error('[Webhook] Invalid HMAC — header:', hmacHeader, 'digest:', digest)
         return new NextResponse('Unauthorized', { status: 401 })
       }
     }
 
     const order = JSON.parse(rawBody)
+    console.log('[Webhook] Order received:', order.id, 'shop:', shopDomain)
 
-    // ── Find destination shop to get user_id ──────────────────────────────────
     const cleanDomain = shopDomain.replace(/^https?:\/\//, '').replace(/\/$/, '')
     const { data: destShop } = await supabaseAdmin
       .from('shops')
@@ -43,8 +44,6 @@ export async function POST(req: NextRequest) {
       .single()
 
     const userId = destShop?.user_id || null
-
-    // ── Save order ─────────────────────────────────────────────────────────────
     const checkoutToken = order.checkout_token || null
     const amount = parseFloat(order.total_price || '0')
     const currency = order.currency || 'EUR'
@@ -57,7 +56,6 @@ export async function POST(req: NextRequest) {
       checkout_token: checkoutToken,
     })
 
-    // ── Update matching redirection status ────────────────────────────────────
     if (checkoutToken && userId) {
       await supabaseAdmin
         .from('redirections')
@@ -67,10 +65,10 @@ export async function POST(req: NextRequest) {
         .eq('status', 'pending')
     }
 
+    console.log('[Webhook] Order saved:', order.id)
     return new NextResponse('OK', { status: 200 })
   } catch (err) {
-    console.error('Webhook error:', err)
-    // Always return 200 to prevent Shopify from retrying on our errors
+    console.error('[Webhook] Error:', err)
     return new NextResponse('OK', { status: 200 })
   }
 }

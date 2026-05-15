@@ -6,18 +6,12 @@ export async function POST(req: NextRequest) {
   try {
     const rawBody = await req.text()
     const hmacHeader = req.headers.get('x-shopify-hmac-sha256') || ''
-    const shopDomain = req.headers.get('x-shopify-shop-domain') || ''
 
     const secret = process.env.SHOPIFY_WEBHOOK_SECRET || ''
-    if (!secret) {
-      console.warn('SHOPIFY_WEBHOOK_SECRET not set')
-    } else {
-      // Force raw string key — Shopify signs with the literal secret string
+    if (secret) {
       const digest = createHmac('sha256', secret)
         .update(rawBody, 'utf8')
         .digest('base64')
-
-      console.log('[Webhook] HMAC check — header:', hmacHeader, 'digest:', digest, 'match:', hmacHeader === digest)
 
       const hmacBuffer = Buffer.from(hmacHeader, 'base64')
       const digestBuffer = Buffer.from(digest, 'base64')
@@ -32,13 +26,12 @@ export async function POST(req: NextRequest) {
     }
 
     const order = JSON.parse(rawBody)
-    console.log('[Webhook] Order received:', order.id, 'shop:', shopDomain)
+    console.log('[Webhook] Order received:', order.id)
 
-    const cleanDomain = shopDomain.replace(/^https?:\/\//, '').replace(/\/$/, '')
+    // Récupérer la boutique destination (indépendamment du domain header)
     const { data: destShop } = await supabaseAdmin
       .from('shops')
       .select('user_id')
-      .eq('shop_domain', cleanDomain)
       .eq('role', 'destination')
       .single()
 
@@ -47,13 +40,19 @@ export async function POST(req: NextRequest) {
     const amount = parseFloat(order.total_price || '0')
     const currency = order.currency || 'EUR'
 
-    await supabaseAdmin.from('orders').insert({
+    const { error } = await supabaseAdmin.from('orders').insert({
       user_id: userId,
       shopify_order_id: String(order.id),
       amount,
       currency,
       checkout_token: checkoutToken,
     })
+
+    if (error) {
+      console.error('[Webhook] Supabase insert error:', error)
+    } else {
+      console.log('[Webhook] Order inserted in DB:', order.id)
+    }
 
     if (checkoutToken && userId) {
       await supabaseAdmin
@@ -64,7 +63,6 @@ export async function POST(req: NextRequest) {
         .eq('status', 'pending')
     }
 
-    console.log('[Webhook] Order saved:', order.id)
     return new NextResponse('OK', { status: 200 })
   } catch (err) {
     console.error('[Webhook] Error:', err)

@@ -12,22 +12,21 @@ export async function POST(req: NextRequest) {
     if (!secret) {
       console.warn('SHOPIFY_WEBHOOK_SECRET not set')
     } else {
-      const secretKey = secret.match(/^[0-9a-f]{64}$/i)
-        ? Buffer.from(secret, 'hex')
-        : secret
-
-      const digest = createHmac('sha256', secretKey)
+      // Force raw string key — Shopify signs with the literal secret string
+      const digest = createHmac('sha256', secret)
         .update(rawBody, 'utf8')
         .digest('base64')
 
-      const hmacBuffer = Buffer.from(hmacHeader)
-      const digestBuffer = Buffer.from(digest)
+      console.log('[Webhook] HMAC check — header:', hmacHeader, 'digest:', digest, 'match:', hmacHeader === digest)
+
+      const hmacBuffer = Buffer.from(hmacHeader, 'base64')
+      const digestBuffer = Buffer.from(digest, 'base64')
 
       if (
         hmacBuffer.length !== digestBuffer.length ||
         !timingSafeEqual(hmacBuffer, digestBuffer)
       ) {
-        console.error('[Webhook] Invalid HMAC — header:', hmacHeader, 'digest:', digest)
+        console.error('[Webhook] Invalid HMAC')
         return new NextResponse('Unauthorized', { status: 401 })
       }
     }

@@ -20,16 +20,17 @@ function ShopForm({ role, existing, onSaved, onDisconnect }: {
   const [domain, setDomain] = useState('')
   const [clientId, setClientId] = useState('')
   const [clientSecret, setClientSecret] = useState('')
+  const [webhookSecret, setWebhookSecret] = useState('')
   const [loading, setLoading] = useState(false)
   const [disconnecting, setDisconnecting] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
 
-  // Sync form with existing data when shop loads/changes
   useEffect(() => {
     setDomain(existing?.shop_domain ?? '')
     setClientId(existing?.client_id ?? '')
     setClientSecret('')
+    setWebhookSecret('')
     setError('')
     setSuccess('')
   }, [existing?.id])
@@ -43,15 +44,20 @@ function ShopForm({ role, existing, onSaved, onDisconnect }: {
     setError('')
     setSuccess('')
 
+    const body: Record<string, string> = {
+      shop_domain: domain,
+      client_id: clientId,
+      client_secret: clientSecret,
+      role,
+    }
+    if (role === 'destination' && webhookSecret) {
+      body.webhook_secret = webhookSecret
+    }
+
     const res = await fetch('/api/shops', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        shop_domain: domain,
-        client_id: clientId,
-        client_secret: clientSecret,
-        role,
-      }),
+      body: JSON.stringify(body),
     })
     const data = await res.json()
     setLoading(false)
@@ -61,6 +67,7 @@ function ShopForm({ role, existing, onSaved, onDisconnect }: {
     } else {
       setSuccess(`✓ ${data.shop_name ?? label} connectée avec succès !`)
       setClientSecret('')
+      setWebhookSecret('')
       onSaved()
     }
   }
@@ -78,7 +85,6 @@ function ShopForm({ role, existing, onSaved, onDisconnect }: {
 
   return (
     <div className="card">
-      {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
         <span className={`badge ${role === 'source' ? 'badge-source' : 'badge-dest'}`}>
           {role === 'source' ? 'Source A' : 'Destination B'}
@@ -103,7 +109,6 @@ function ShopForm({ role, existing, onSaved, onDisconnect }: {
         </div>
       </div>
 
-      {/* Connected summary badge */}
       {existing?.connected && (
         <div style={{
           padding: '10px 14px', borderRadius: '8px', marginBottom: '16px',
@@ -137,7 +142,7 @@ function ShopForm({ role, existing, onSaved, onDisconnect }: {
           />
         </div>
         <div>
-          <label>Client Secret (API Secret Key — shpss_...)</label>
+          <label>Client Secret (API Secret Key)</label>
           <input
             className="input" type="password" required
             value={clientSecret} onChange={e => setClientSecret(e.target.value)}
@@ -148,6 +153,21 @@ function ShopForm({ role, existing, onSaved, onDisconnect }: {
             Requis à chaque (re)connexion — non affiché une fois enregistré.
           </p>
         </div>
+
+        {role === 'destination' && (
+          <div>
+            <label>Webhook Signing Secret</label>
+            <input
+              className="input" type="password"
+              value={webhookSecret} onChange={e => setWebhookSecret(e.target.value)}
+              placeholder="Coller la signing secret du webhook Shopify"
+              autoComplete="off"
+            />
+            <p style={{ fontSize: '11px', color: '#6b6b8a', marginTop: '4px' }}>
+              Admin boutique B → Paramètres → Notifications → Webhooks → Signing secret
+            </p>
+          </div>
+        )}
 
         <div style={{
           padding: '12px 14px', borderRadius: '8px',
@@ -260,7 +280,7 @@ export default function SetupPage() {
                   padding: '14px', fontFamily: 'monospace', fontSize: '13px', color: '#a5b4fc',
                   overflowX: 'auto', userSelect: 'all',
                 }}>
-                  {`<script src="${APP_URL}/api/script.js?shop={{ shop.permanent_domain }}" defer></script>`}
+                  {`<script src="${APP_URL}/api/script.js?shop={{ shop.permanent_domain }}"></script>`}
                 </div>
               </div>
             )}
@@ -281,10 +301,7 @@ export default function SetupPage() {
                   </code>
                 </div>
                 <p style={{ fontSize: '12px', color: '#6b6b8a', marginTop: '10px' }}>
-                  Copiez la <strong>Webhook signing secret</strong> → variable{' '}
-                  <code style={{ background: 'rgba(255,255,255,0.06)', padding: '2px 6px', borderRadius: '4px' }}>
-                    SHOPIFY_WEBHOOK_SECRET
-                  </code>
+                  Copiez la <strong>Webhook signing secret</strong> → champ <strong>Webhook Signing Secret</strong> dans le formulaire Boutique B ci-dessus.
                 </p>
               </div>
             )}

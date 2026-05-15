@@ -3,7 +3,6 @@ import { getSession } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabase'
 import { validateShopCredentials } from '@/lib/shopify'
 
-// GET /api/shops – Retourne les boutiques connectées (sans les secrets)
 export async function GET() {
   const session = await getSession()
   if (!session) return NextResponse.json({ error: 'Non authentifié' }, { status: 401 })
@@ -16,13 +15,10 @@ export async function GET() {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-  // Exposer un champ `connected` pour l'UI (shop existe = connectée)
   const shops = (data ?? []).map(s => ({ ...s, connected: true }))
-
   return NextResponse.json({ shops })
 }
 
-// POST /api/shops – Connexion boutique via client_credentials
 export async function POST(req: NextRequest) {
   const session = await getSession()
   if (!session) return NextResponse.json({ error: 'Non authentifié' }, { status: 401 })
@@ -32,6 +28,7 @@ export async function POST(req: NextRequest) {
     client_id?: string
     client_secret?: string
     role?: string
+    webhook_secret?: string
   }
 
   try {
@@ -40,7 +37,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Corps JSON invalide.' }, { status: 400 })
   }
 
-  const { shop_domain, client_id, client_secret, role } = body
+  const { shop_domain, client_id, client_secret, role, webhook_secret } = body
 
   if (!shop_domain || !client_id || !client_secret || !role) {
     return NextResponse.json(
@@ -69,7 +66,6 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  // Valider les credentials : génère un token + appelle /shop.json
   const validation = await validateShopCredentials(
     normalizedDomain,
     client_id.trim(),
@@ -83,20 +79,22 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  // Upsert en base (une source + une destination par user)
+  const upsertData: Record<string, unknown> = {
+    user_id: session.userId,
+    shop_domain: normalizedDomain,
+    client_id: client_id.trim(),
+    client_secret: client_secret.trim(),
+    access_token: null,
+    role,
+  }
+
+  if (role === 'destination' && webhook_secret) {
+    upsertData.webhook_secret = webhook_secret.trim()
+  }
+
   const { error: upsertError } = await supabaseAdmin
     .from('shops')
-    .upsert(
-      {
-        user_id: session.userId,
-        shop_domain: normalizedDomain,
-        client_id: client_id.trim(),
-        client_secret: client_secret.trim(),
-        access_token: null, // non utilisé : token généré à la volée
-        role,
-      },
-      { onConflict: 'user_id,role' }
-    )
+    .upsert(upsertData, { onConflict: 'user_id,role' })
 
   if (upsertError) {
     return NextResponse.json({ error: upsertError.message }, { status: 500 })

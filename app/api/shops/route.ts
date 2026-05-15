@@ -46,6 +46,13 @@ export async function POST(req: NextRequest) {
     )
   }
 
+  if (role === 'destination' && !webhook_secret) {
+    return NextResponse.json(
+      { error: 'La Webhook Signing Secret est obligatoire pour la boutique destination.' },
+      { status: 400 }
+    )
+  }
+
   if (!['source', 'destination'].includes(role)) {
     return NextResponse.json(
       { error: 'role doit être "source" ou "destination".' },

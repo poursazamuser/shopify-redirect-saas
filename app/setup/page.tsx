@@ -162,6 +162,7 @@ function ShopForm({ role, existing, onSaved, onDisconnect }: {
               value={webhookSecret} onChange={e => setWebhookSecret(e.target.value)}
               placeholder="Coller la signing secret du webhook Shopify"
               autoComplete="off"
+              required
             />
             <p style={{ fontSize: '11px', color: '#6b6b8a', marginTop: '4px' }}>
               Admin boutique B → Paramètres → Notifications → Webhooks → Signing secret

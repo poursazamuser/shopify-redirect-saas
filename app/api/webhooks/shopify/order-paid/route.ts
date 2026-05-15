@@ -7,8 +7,23 @@ export async function POST(req: NextRequest) {
     const rawBody = await req.text()
     const hmacHeader = req.headers.get('x-shopify-hmac-sha256') || ''
 
-    const secret = process.env.SHOPIFY_WEBHOOK_SECRET || ''
-    if (secret) {
+    // Récupérer toutes les boutiques destination avec leur webhook_secret
+    const { data: destShops } = await supabaseAdmin
+      .from('shops')
+      .select('user_id, shop_domain, webhook_secret')
+      .eq('role', 'destination')
+
+    if (!destShops || destShops.length === 0) {
+      console.error('[Webhook] No destination shops found')
+      return new NextResponse('OK', { status: 200 })
+    }
+
+    // Trouver la boutique dont le secret valide le HMAC
+    let matchedShop = null
+    for (const shop of destShops) {
+      const secret = shop.webhook_secret || process.env.SHOPIFY_WEBHOOK_SECRET || ''
+      if (!secret) continue
+
       const digest = createHmac('sha256', secret)
         .update(rawBody, 'utf8')
         .digest('base64')
@@ -17,31 +32,28 @@ export async function POST(req: NextRequest) {
       const digestBuffer = Buffer.from(digest, 'base64')
 
       if (
-        hmacBuffer.length !== digestBuffer.length ||
-        !timingSafeEqual(hmacBuffer, digestBuffer)
+        hmacBuffer.length === digestBuffer.length &&
+        timingSafeEqual(hmacBuffer, digestBuffer)
       ) {
-        console.error('[Webhook] Invalid HMAC')
-        return new NextResponse('Unauthorized', { status: 401 })
+        matchedShop = shop
+        break
       }
     }
 
+    if (!matchedShop) {
+      console.error('[Webhook] No shop matched HMAC signature')
+      return new NextResponse('Unauthorized', { status: 401 })
+    }
+
     const order = JSON.parse(rawBody)
-    console.log('[Webhook] Order received:', order.id)
+    console.log('[Webhook] Order received:', order.id, 'shop:', matchedShop.shop_domain)
 
-    // Récupérer la boutique destination (indépendamment du domain header)
-    const { data: destShop } = await supabaseAdmin
-      .from('shops')
-      .select('user_id')
-      .eq('role', 'destination')
-      .single()
-
-    const userId = destShop?.user_id || null
     const checkoutToken = order.checkout_token || null
     const amount = parseFloat(order.total_price || '0')
     const currency = order.currency || 'EUR'
 
     const { error } = await supabaseAdmin.from('orders').insert({
-      user_id: userId,
+      user_id: matchedShop.user_id,
       shopify_order_id: String(order.id),
       amount,
       currency,
@@ -51,15 +63,15 @@ export async function POST(req: NextRequest) {
     if (error) {
       console.error('[Webhook] Supabase insert error:', error)
     } else {
-      console.log('[Webhook] Order inserted in DB:', order.id)
+      console.log('[Webhook] Order inserted:', order.id)
     }
 
-    if (checkoutToken && userId) {
+    if (checkoutToken && matchedShop.user_id) {
       await supabaseAdmin
         .from('redirections')
         .update({ status: 'completed' })
         .eq('checkout_token', checkoutToken)
-        .eq('user_id', userId)
+        .eq('user_id', matchedShop.user_id)
         .eq('status', 'pending')
     }
 

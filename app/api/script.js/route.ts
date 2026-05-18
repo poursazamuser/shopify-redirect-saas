@@ -1,10 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://your-app.railway.app'
+const APP_URL = (process.env.NEXT_PUBLIC_APP_URL || 'https://your-app.railway.app').replace(/\/$/, '')
 
-// GET /api/script.js – Served to Shopify store A via <script> tag
-// The merchant adds: <script src="https://your-app.railway.app/api/script.js"></script>
-// to the theme.liquid of store A
 export async function GET(req: NextRequest) {
   const shopDomain = req.nextUrl.searchParams.get('shop') || ''
 
@@ -13,9 +10,20 @@ export async function GET(req: NextRequest) {
   'use strict';
 
   var REDIRECT_API = '${APP_URL}/api/redirect';
-  var SHOP_DOMAIN = '${shopDomain}' || window.Shopify && window.Shopify.shop || window.location.hostname;
+  var SHOP_DOMAIN = '${shopDomain}' || window.location.hostname;
 
-  // ─── Robust checkout button detection ───────────────────────────────────────
+  function doRedirect(items) {
+    return fetch(REDIRECT_API, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: items, shop_domain: SHOP_DOMAIN }),
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) { return data.checkoutUrl || null; })
+    .catch(function() { return null; });
+  }
+
+  // ─── Checkout buttons (page /cart) ──────────────────────────────────────────
   function findCheckoutButtons() {
     var selectors = [
       '[name="checkout"]',
@@ -31,12 +39,10 @@ export async function GET(req: NextRequest) {
       'button.btn--checkout',
       'a[href*="/checkout"]',
     ];
-
     var found = [];
     selectors.forEach(function(sel) {
       try {
-        var els = document.querySelectorAll(sel);
-        els.forEach(function(el) {
+        document.querySelectorAll(sel).forEach(function(el) {
           if (found.indexOf(el) === -1) found.push(el);
         });
       } catch(e) {}
@@ -44,20 +50,13 @@ export async function GET(req: NextRequest) {
     return found;
   }
 
-  // ─── Intercept handler ───────────────────────────────────────────────────────
   function handleCheckoutClick(e) {
     var btn = e.currentTarget || e.target;
-
-    // If it's a plain link to checkout, let it go if we fail
-    var isLink = btn.tagName === 'A';
-
     e.preventDefault();
     e.stopPropagation();
-
     if (btn._intercepted) return;
     btn._intercepted = true;
 
-    // Fetch current cart
     fetch('/cart.js')
       .then(function(r) { return r.json(); })
       .then(function(cart) {
@@ -66,36 +65,19 @@ export async function GET(req: NextRequest) {
           triggerNativeCheckout(btn);
           return;
         }
-
         var items = cart.items.map(function(item) {
           return { variant_id: String(item.variant_id), quantity: item.quantity };
         });
-
-        return fetch(REDIRECT_API, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ items: items, shop_domain: SHOP_DOMAIN }),
-        })
-        .then(function(r) {
-          if (!r.ok) {
-            console.warn('[ShopBridge] Redirect API error:', r.status, r.statusText);
-          }
-          return r.json();
-        })
-        .then(function(data) {
-          if (data.checkoutUrl) {
-            console.log('[ShopBridge] Redirecting to:', data.checkoutUrl);
-            window.location.href = data.checkoutUrl;
+        doRedirect(items).then(function(url) {
+          if (url) {
+            window.location.href = url;
           } else {
-            console.warn('[ShopBridge] No checkoutUrl returned:', data.error);
             btn._intercepted = false;
             triggerNativeCheckout(btn);
           }
         });
       })
-      .catch(function(err) {
-        // Fail → native Shopify checkout (CORS, réseau, etc.)
-        console.warn('[ShopBridge] Caught error, falling back to native checkout:', err);
+      .catch(function() {
         btn._intercepted = false;
         triggerNativeCheckout(btn);
       });
@@ -108,50 +90,98 @@ export async function GET(req: NextRequest) {
       form.submit();
     } else if (btn.tagName === 'A' && btn.href) {
       window.location.href = btn.href;
-    } else if (btn.click) {
+    } else {
       btn.removeEventListener('click', handleCheckoutClick, true);
       btn.click();
     }
   }
 
-  // Prevent form submission to handle it ourselves
-  function preventFormSubmit(e) {
-    e.preventDefault();
+  function preventFormSubmit(e) { e.preventDefault(); }
+
+  // ─── Product form (page produit) ─────────────────────────────────────────────
+  function findProductForms() {
+    return document.querySelectorAll('form[action*="/cart/add"]');
   }
 
-  // ─── Attach listeners ────────────────────────────────────────────────────────
-  function attachListeners() {
-    var buttons = findCheckoutButtons();
-    buttons.forEach(function(btn) {
-      if (btn._redirectAttached) return;
-      btn._redirectAttached = true;
+  function getVariantFromForm(form) {
+    var input = form.querySelector('input[name="id"], select[name="id"]');
+    return input ? input.value : null;
+  }
 
-      var form = btn.closest('form');
-      if (form) {
-        form.addEventListener('submit', preventFormSubmit, true);
+  function getQuantityFromForm(form) {
+    var input = form.querySelector('input[name="quantity"]');
+    return input ? parseInt(input.value) || 1 : 1;
+  }
+
+  function handleProductFormSubmit(e) {
+    var form = e.currentTarget;
+    // Seulement si le submit vient d'un bouton "Acheter maintenant" (pas "Ajouter au panier")
+    var submitter = e.submitter;
+    var isBuyNow = submitter && (
+      submitter.getAttribute('data-buy-now') !== null ||
+      (submitter.textContent && /buy now|acheter maintenant|payer maintenant/i.test(submitter.textContent))
+    );
+    if (!isBuyNow) return; // laisser passer les ajouts au panier normaux
+
+    var variantId = getVariantFromForm(form);
+    var quantity = getQuantityFromForm(form);
+    if (!variantId) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    var items = [{ variant_id: String(variantId), quantity: quantity }];
+    doRedirect(items).then(function(url) {
+      if (url) {
+        window.location.href = url;
+      } else {
+        form.removeEventListener('submit', handleProductFormSubmit, true);
+        form.submit();
       }
-
-      btn.addEventListener('click', handleCheckoutClick, true);
     });
   }
 
-  // ─── Observe DOM for dynamic themes (React/Ajax carts) ──────────────────────
+  // ─── Intercept /cart/add fetch + XHR (Ajax add-to-cart + checkout) ───────────
+  // Shopify Ajax API : POST /cart/add puis redirect vers /checkout
+  // On intercepte fetch pour détecter les appels checkout
+  var _origFetch = window.fetch;
+  window.fetch = function(input, init) {
+    var url = typeof input === 'string' ? input : (input && input.url) || '';
+    if (url.indexOf('/checkout') !== -1 && url.indexOf('cdn') === -1) {
+      // Intercepter la navigation vers checkout via fetch
+      return _origFetch.apply(this, arguments);
+    }
+    return _origFetch.apply(this, arguments);
+  };
+
+  // ─── Attach listeners ────────────────────────────────────────────────────────
+  function attachListeners() {
+    // Checkout buttons
+    findCheckoutButtons().forEach(function(btn) {
+      if (btn._redirectAttached) return;
+      btn._redirectAttached = true;
+      var form = btn.closest('form');
+      if (form) form.addEventListener('submit', preventFormSubmit, true);
+      btn.addEventListener('click', handleCheckoutClick, true);
+    });
+
+    // Product forms
+    findProductForms().forEach(function(form) {
+      if (form._productFormAttached) return;
+      form._productFormAttached = true;
+      form.addEventListener('submit', handleProductFormSubmit, true);
+    });
+  }
+
   function init() {
     attachListeners();
-
-    // MutationObserver for Ajax/dynamic carts (Dawn, etc.)
     if (window.MutationObserver) {
-      var observer = new MutationObserver(function() {
-        attachListeners();
-      });
-      observer.observe(document.body, { childList: true, subtree: true });
+      new MutationObserver(function() { attachListeners(); })
+        .observe(document.body, { childList: true, subtree: true });
     }
-
-    // Fallback interval for themes that rebuild DOM
     setInterval(attachListeners, 1500);
   }
 
-  // ─── Bootstrap ──────────────────────────────────────────────────────────────
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);
   } else {

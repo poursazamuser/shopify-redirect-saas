@@ -23,14 +23,12 @@ export async function GET(req: NextRequest) {
     .catch(function() { return null; });
   }
 
-  // ─── Checkout buttons (page /cart) ──────────────────────────────────────────
   function findCheckoutButtons() {
     var selectors = [
       '[name="checkout"]',
       'button[type="submit"][name="checkout"]',
       'input[type="submit"][name="checkout"]',
       'form[action*="/checkout"] button[type="submit"]',
-      'form[action*="/checkout"] input[type="submit"]',
       '.cart__checkout-button',
       '.cart-checkout-btn',
       '.checkout-button',
@@ -98,7 +96,7 @@ export async function GET(req: NextRequest) {
 
   function preventFormSubmit(e) { e.preventDefault(); }
 
-  // ─── Product form (page produit) ─────────────────────────────────────────────
+  // ─── Product form (buy it now) ───────────────────────────────────────────────
   function findProductForms() {
     return document.querySelectorAll('form[action*="/cart/add"]');
   }
@@ -108,30 +106,23 @@ export async function GET(req: NextRequest) {
     return input ? input.value : null;
   }
 
-  function getQuantityFromForm(form) {
-    var input = form.querySelector('input[name="quantity"]');
-    return input ? parseInt(input.value) || 1 : 1;
-  }
-
   function handleProductFormSubmit(e) {
     var form = e.currentTarget;
-    // Seulement si le submit vient d'un bouton "Acheter maintenant" (pas "Ajouter au panier")
     var submitter = e.submitter;
     var isBuyNow = submitter && (
       submitter.getAttribute('data-buy-now') !== null ||
-      (submitter.textContent && /buy now|acheter maintenant|payer maintenant/i.test(submitter.textContent))
+      (submitter.textContent && /buy.?now|acheter maintenant|payer maintenant/i.test(submitter.textContent.trim()))
     );
-    if (!isBuyNow) return; // laisser passer les ajouts au panier normaux
+    if (!isBuyNow) return;
 
     var variantId = getVariantFromForm(form);
-    var quantity = getQuantityFromForm(form);
+    var quantity = parseInt((form.querySelector('input[name="quantity"]') || {}).value) || 1;
     if (!variantId) return;
 
     e.preventDefault();
     e.stopPropagation();
 
-    var items = [{ variant_id: String(variantId), quantity: quantity }];
-    doRedirect(items).then(function(url) {
+    doRedirect([{ variant_id: String(variantId), quantity: quantity }]).then(function(url) {
       if (url) {
         window.location.href = url;
       } else {
@@ -141,22 +132,8 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  // ─── Intercept /cart/add fetch + XHR (Ajax add-to-cart + checkout) ───────────
-  // Shopify Ajax API : POST /cart/add puis redirect vers /checkout
-  // On intercepte fetch pour détecter les appels checkout
-  var _origFetch = window.fetch;
-  window.fetch = function(input, init) {
-    var url = typeof input === 'string' ? input : (input && input.url) || '';
-    if (url.indexOf('/checkout') !== -1 && url.indexOf('cdn') === -1) {
-      // Intercepter la navigation vers checkout via fetch
-      return _origFetch.apply(this, arguments);
-    }
-    return _origFetch.apply(this, arguments);
-  };
-
-  // ─── Attach listeners ────────────────────────────────────────────────────────
+  // ─── Attach all listeners ────────────────────────────────────────────────────
   function attachListeners() {
-    // Checkout buttons
     findCheckoutButtons().forEach(function(btn) {
       if (btn._redirectAttached) return;
       btn._redirectAttached = true;
@@ -165,7 +142,6 @@ export async function GET(req: NextRequest) {
       btn.addEventListener('click', handleCheckoutClick, true);
     });
 
-    // Product forms
     findProductForms().forEach(function(form) {
       if (form._productFormAttached) return;
       form._productFormAttached = true;
@@ -173,20 +149,35 @@ export async function GET(req: NextRequest) {
     });
   }
 
+  // ─── Re-init on SPA navigation (Shopify uses history.pushState) ──────────────
   function init() {
     attachListeners();
     if (window.MutationObserver) {
       new MutationObserver(function() { attachListeners(); })
         .observe(document.body, { childList: true, subtree: true });
     }
-    setInterval(attachListeners, 1500);
+    setInterval(attachListeners, 1000);
   }
+
+  // Patch history.pushState pour détecter les navigations SPA
+  var _origPushState = history.pushState;
+  history.pushState = function() {
+    _origPushState.apply(this, arguments);
+    setTimeout(attachListeners, 300);
+    setTimeout(attachListeners, 800);
+  };
+
+  window.addEventListener('popstate', function() {
+    setTimeout(attachListeners, 300);
+  });
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);
   } else {
     init();
   }
+
+  window._shopBridgeLoaded = true;
 })();
 `.trim()
 

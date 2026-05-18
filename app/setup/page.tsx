@@ -239,6 +239,7 @@ export default function SetupPage() {
             {[
               { href: '/setup', label: 'Configuration' },
               { href: '/mappings', label: 'Mappings' },
+              { href: '/pixels', label: 'Pixels' },
               { href: '/dashboard', label: 'Dashboard' },
             ].map(l => (
               <Link key={l.href} href={l.href} style={{

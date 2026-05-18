@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-const APP_URL = (process.env.NEXT_PUBLIC_APP_URL || 'https://your-app.railway.app').replace(/\/$/, '')
+const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://your-app.railway.app'
 
 export async function GET(req: NextRequest) {
   const shopDomain = req.nextUrl.searchParams.get('shop') || ''
@@ -10,111 +10,49 @@ export async function GET(req: NextRequest) {
   'use strict';
 
   var REDIRECT_API = '${APP_URL}/api/redirect';
-  var SHOP_DOMAIN = '${shopDomain}' || window.location.hostname;
-  var _redirecting = false;
+  var SHOP_DOMAIN = '${shopDomain}' || (window.Shopify && window.Shopify.shop) || window.location.hostname;
 
-  // ─── Appel API redirect ───────────────────────────────────────────────────
-  function doRedirect(items, fallback) {
-    if (_redirecting) return;
-    _redirecting = true;
+  // ─── Capture des click IDs publicitaires ─────────────────────────────────────
+  // Lit fbclid, gclid, ttclid, ScCid depuis l'URL ET depuis les cookies
+  function getClickIds() {
+    var params = new URLSearchParams(window.location.search);
+    var ids = {};
 
-    fetch(REDIRECT_API, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items: items, shop_domain: SHOP_DOMAIN }),
-    })
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      if (data.checkoutUrl) {
-        window.location.href = data.checkoutUrl;
+    var keys = ['fbclid', 'gclid', 'ttclid', 'ScCid'];
+    keys.forEach(function(k) {
+      var v = params.get(k);
+      if (v) {
+        ids[k] = v;
+        // Persister en sessionStorage pour les pages suivantes
+        try { sessionStorage.setItem('_sb_' + k, v); } catch(e) {}
       } else {
-        _redirecting = false;
-        if (fallback) fallback();
+        // Récupérer depuis sessionStorage si déjà capturé sur une page précédente
+        try {
+          var stored = sessionStorage.getItem('_sb_' + k);
+          if (stored) ids[k] = stored;
+        } catch(e) {}
       }
-    })
-    .catch(function() {
-      _redirecting = false;
-      if (fallback) fallback();
     });
-  }
 
-  // ─── Récupérer le panier et rediriger ────────────────────────────────────
-  function redirectFromCart(fallback) {
-    fetch('/cart.js')
-      .then(function(r) { return r.json(); })
-      .then(function(cart) {
-        if (!cart.items || cart.items.length === 0) {
-          if (fallback) fallback();
-          return;
+    // Facebook stocke aussi _fbc et _fbp en cookie
+    try {
+      document.cookie.split(';').forEach(function(c) {
+        var parts = c.trim().split('=');
+        if (parts[0] === '_fbc' && !ids.fbclid) {
+          // Extraire le fbclid depuis le cookie _fbc (format: fb.1.timestamp.fbclid)
+          var fbcParts = parts[1] && parts[1].split('.');
+          if (fbcParts && fbcParts.length >= 4) ids.fbclid = fbcParts.slice(3).join('.');
         }
-        var items = cart.items.map(function(item) {
-          return { variant_id: String(item.variant_id), quantity: item.quantity };
-        });
-        doRedirect(items, fallback);
-      })
-      .catch(function() { if (fallback) fallback(); });
+      });
+    } catch(e) {}
+
+    return ids;
   }
 
-  // ─── Interception navigation vers /checkout ──────────────────────────────
-  function interceptCheckoutNavigation() {
-    // 1. Intercepter window.location avant navigation
-    var _origAssign = window.location.assign.bind(window.location);
-    var _origReplace = window.location.replace.bind(window.location);
+  // Capturer les click IDs dès le chargement de la page
+  var CLICK_IDS = getClickIds();
 
-    function checkUrl(url, fallback) {
-      if (url && String(url).indexOf('/checkout') !== -1 && !_redirecting) {
-        redirectFromCart(fallback);
-        return true;
-      }
-      return false;
-    }
-
-    // 2. Intercepter les liens <a href="/checkout">
-    document.addEventListener('click', function(e) {
-      var target = e.target;
-      while (target && target !== document) {
-        if (target.tagName === 'A' && target.href && target.href.indexOf('/checkout') !== -1) {
-          e.preventDefault();
-          e.stopPropagation();
-          redirectFromCart(function() { window.location.href = target.href; });
-          return;
-        }
-        target = target.parentElement;
-      }
-    }, true);
-
-    // 3. Intercepter les formulaires qui soumettent vers /checkout
-    document.addEventListener('submit', function(e) {
-      var form = e.target;
-      if (form && form.action && form.action.indexOf('/checkout') !== -1) {
-        e.preventDefault();
-        e.stopPropagation();
-        redirectFromCart(function() { form.submit(); });
-      }
-    }, true);
-
-    // 4. Intercepter history.pushState (SPA navigation)
-    var _origPushState = history.pushState.bind(history);
-    history.pushState = function(state, title, url) {
-      if (url && String(url).indexOf('/checkout') !== -1 && !_redirecting) {
-        redirectFromCart(function() { _origPushState(state, title, url); });
-        return;
-      }
-      _origPushState(state, title, url);
-    };
-  }
-
-  // ─── Variant sélectionné sur page produit ────────────────────────────────
-  function getSelectedVariant() {
-    var variantInput = document.querySelector('input[name="id"], select[name="id"]');
-    if (variantInput && variantInput.value) return variantInput.value;
-    if (window.ShopifyAnalytics && window.ShopifyAnalytics.meta && window.ShopifyAnalytics.meta.selectedVariantId) {
-      return String(window.ShopifyAnalytics.meta.selectedVariantId);
-    }
-    return null;
-  }
-
-  // ─── Boutons checkout classiques (page panier) ───────────────────────────
+  // ─── Détection des boutons checkout ──────────────────────────────────────────
   function findCheckoutButtons() {
     var selectors = [
       '[name="checkout"]',
@@ -128,6 +66,7 @@ export async function GET(req: NextRequest) {
       '#checkout',
       '[data-checkout-button]',
       'button.btn--checkout',
+      'a[href*="/checkout"]',
     ];
     var found = [];
     selectors.forEach(function(sel) {
@@ -140,87 +79,92 @@ export async function GET(req: NextRequest) {
     return found;
   }
 
-  // ─── Boutons "Acheter maintenant" (page produit) ─────────────────────────
-  function findBuyNowButtons() {
-    var selectors = [
-      '.shopify-payment-button__button',
-      '[data-shopify="payment-button"]',
-    ];
-    var found = [];
-    selectors.forEach(function(sel) {
-      try {
-        document.querySelectorAll(sel).forEach(function(el) {
-          if (found.indexOf(el) === -1) found.push(el);
-        });
-      } catch(e) {}
-    });
-    return found;
-  }
-
+  // ─── Intercepteur ────────────────────────────────────────────────────────────
   function handleCheckoutClick(e) {
     var btn = e.currentTarget || e.target;
+    e.preventDefault();
+    e.stopPropagation();
+
     if (btn._intercepted) return;
     btn._intercepted = true;
-    e.preventDefault();
-    e.stopPropagation();
 
-    redirectFromCart(function() {
-      btn._intercepted = false;
-      var form = btn.closest('form');
-      if (form) { form.submit(); }
-      else if (btn.click) { btn.removeEventListener('click', handleCheckoutClick, true); btn.click(); }
-    });
+    fetch('/cart.js')
+      .then(function(r) { return r.json(); })
+      .then(function(cart) {
+        if (!cart.items || cart.items.length === 0) {
+          btn._intercepted = false;
+          triggerNativeCheckout(btn);
+          return;
+        }
+
+        var items = cart.items.map(function(item) {
+          return { variant_id: String(item.variant_id), quantity: item.quantity };
+        });
+
+        return fetch(REDIRECT_API, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            items: items,
+            shop_domain: SHOP_DOMAIN,
+            click_ids: CLICK_IDS,           // ← envoi des click IDs
+            page_url: window.location.href,
+          }),
+        })
+        .then(function(r) {
+          if (!r.ok) console.warn('[ShopBridge] API error:', r.status);
+          return r.json();
+        })
+        .then(function(data) {
+          if (data.checkoutUrl) {
+            console.log('[ShopBridge] Redirecting to:', data.checkoutUrl);
+            window.location.href = data.checkoutUrl;
+          } else {
+            console.warn('[ShopBridge] No checkoutUrl:', data.error);
+            btn._intercepted = false;
+            triggerNativeCheckout(btn);
+          }
+        });
+      })
+      .catch(function(err) {
+        console.warn('[ShopBridge] Error, native checkout fallback:', err);
+        btn._intercepted = false;
+        triggerNativeCheckout(btn);
+      });
   }
 
-  function handleBuyNowClick(e) {
-    var btn = e.currentTarget || e.target;
-    var variantId = getSelectedVariant();
-    if (!variantId) return;
-    if (btn._buyNowIntercepted) return;
-    btn._buyNowIntercepted = true;
-    e.preventDefault();
-    e.stopPropagation();
-
-    doRedirect(
-      [{ variant_id: String(variantId), quantity: 1 }],
-      function() {
-        btn._buyNowIntercepted = false;
-        btn.removeEventListener('click', handleBuyNowClick, true);
-        btn.click();
-      }
-    );
+  function triggerNativeCheckout(btn) {
+    var form = btn.closest('form');
+    if (form) {
+      form.removeEventListener('submit', preventFormSubmit, true);
+      form.submit();
+    } else if (btn.tagName === 'A' && btn.href) {
+      window.location.href = btn.href;
+    } else if (btn.click) {
+      btn.removeEventListener('click', handleCheckoutClick, true);
+      btn.click();
+    }
   }
 
-  // ─── Attacher les listeners ───────────────────────────────────────────────
+  function preventFormSubmit(e) { e.preventDefault(); }
+
   function attachListeners() {
     findCheckoutButtons().forEach(function(btn) {
       if (btn._redirectAttached) return;
       btn._redirectAttached = true;
       var form = btn.closest('form');
-      if (form && !form._redirectAttached) {
-        form._redirectAttached = true;
-        form.addEventListener('submit', function(e) { e.preventDefault(); }, true);
-      }
+      if (form) form.addEventListener('submit', preventFormSubmit, true);
       btn.addEventListener('click', handleCheckoutClick, true);
-    });
-
-    findBuyNowButtons().forEach(function(btn) {
-      if (btn._buyNowAttached) return;
-      btn._buyNowAttached = true;
-      btn.addEventListener('click', handleBuyNowClick, true);
     });
   }
 
-  // ─── Init ─────────────────────────────────────────────────────────────────
   function init() {
-    interceptCheckoutNavigation();
     attachListeners();
-
     if (window.MutationObserver) {
-      new MutationObserver(function() { attachListeners(); })
-        .observe(document.body, { childList: true, subtree: true });
+      new MutationObserver(attachListeners).observe(document.body, {
+        childList: true, subtree: true,
+      });
     }
-
     setInterval(attachListeners, 1500);
   }
 

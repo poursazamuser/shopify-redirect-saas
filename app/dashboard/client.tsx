@@ -64,7 +64,7 @@ export default function DashboardClient({ stats, recentRedirections, recentOrder
             {[
               { href: '/setup', label: 'Configuration' },
               { href: '/mappings', label: 'Mappings' },
-              { href: '/dashboard', label: 'Dashboard' },
+              { href: '/pixels', label: 'Pixels' }, { href: '/dashboard', label: 'Dashboard' },
             ].map(l => (
               <Link key={l.href} href={l.href} style={{
                 padding: '6px 14px', borderRadius: '6px', fontSize: '14px',

@@ -1,10 +1,7 @@
 import type { NextConfig } from 'next'
 
-const nextConfig = {
-  allowedHosts: [
-    'shopify-redirect-saas-production.up.railway.app',
-    'localhost',
-  ],
+const nextConfig: NextConfig = {
+  // Allow images from Shopify CDN
   images: {
     remotePatterns: [
       {
@@ -17,11 +14,12 @@ const nextConfig = {
       },
     ],
   },
+  // Required for webhook raw body parsing
   experimental: {
     serverActions: {
       bodySizeLimit: '2mb',
     },
   },
-} as NextConfig
+}
 
 export default nextConfig

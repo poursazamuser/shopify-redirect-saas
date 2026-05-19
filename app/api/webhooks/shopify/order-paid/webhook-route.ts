@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createHmac, timingSafeEqual } from 'crypto'
 import { supabaseAdmin } from '@/lib/supabase'
+import { sendConversionEvents } from '@/lib/conversions'
 
 export async function POST(req: NextRequest) {
   try {
     const rawBody = await req.text()
     const hmacHeader = req.headers.get('x-shopify-hmac-sha256') || ''
 
-    // Récupérer toutes les boutiques destination avec leur webhook_secret
     const { data: destShops } = await supabaseAdmin
       .from('shops')
       .select('user_id, shop_domain, webhook_secret')
@@ -18,7 +18,6 @@ export async function POST(req: NextRequest) {
       return new NextResponse('OK', { status: 200 })
     }
 
-    // Trouver la boutique dont le secret valide le HMAC
     let matchedShop = null
     for (const shop of destShops) {
       const secret = shop.webhook_secret || process.env.SHOPIFY_WEBHOOK_SECRET || ''
@@ -51,6 +50,7 @@ export async function POST(req: NextRequest) {
     const checkoutToken = order.checkout_token || null
     const amount = parseFloat(order.total_price || '0')
     const currency = order.currency || 'EUR'
+    const email = order.email || null
 
     const { error } = await supabaseAdmin.from('orders').insert({
       user_id: matchedShop.user_id,
@@ -73,6 +73,21 @@ export async function POST(req: NextRequest) {
         .eq('checkout_token', checkoutToken)
         .eq('user_id', matchedShop.user_id)
         .eq('status', 'pending')
+    }
+
+    const { data: pixels } = await supabaseAdmin
+      .from('pixels')
+      .select('platform, pixel_id, access_token')
+      .eq('user_id', matchedShop.user_id)
+
+    if (pixels && pixels.length > 0) {
+      await sendConversionEvents(pixels, {
+        orderId: String(order.id),
+        amount,
+        currency,
+        email: email ?? undefined,
+        checkoutToken: checkoutToken ?? undefined,
+      })
     }
 
     return new NextResponse('OK', { status: 200 })

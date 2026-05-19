@@ -1,225 +1,123 @@
-/**
- * lib/conversions.ts
- * Envoi des événements de conversion vers chaque plateforme publicitaire
- * via leurs Conversions API respectives.
- *
- * En cas d'échec d'une plateforme : on logue et on continue.
- */
-
-export interface ConversionPayload {
-  orderId: string
-  amount: number        // ex: 49.99
-  currency: string      // ex: 'EUR'
-  clickIds: {
-    fbclid?: string
-    gclid?: string
-    ttclid?: string
-    ScCid?: string
-  }
-  userAgent?: string
-  ip?: string
-  pageUrl?: string
-}
-
-export interface PixelConfig {
-  platform: 'meta' | 'google' | 'tiktok' | 'snapchat'
+interface PixelConfig {
+  platform: string
   pixel_id: string
   access_token: string
 }
 
-// ── Meta (Facebook) Conversions API ──────────────────────────────────────────
-async function fireMetaConversion(
-  pixel: PixelConfig,
-  payload: ConversionPayload
-): Promise<void> {
-  const eventTime = Math.floor(Date.now() / 1000)
+interface OrderData {
+  orderId: string
+  amount: number
+  currency: string
+  email?: string
+  checkoutToken?: string
+}
 
-  // Format fbc : fb.1.{timestamp_ms}.{fbclid}
-  const fbc = payload.clickIds.fbclid
-    ? `fb.1.${Date.now()}.${payload.clickIds.fbclid}`
-    : undefined
-
-  const userData: Record<string, string> = {}
-  if (fbc) userData.fbc = fbc
-  if (payload.ip) userData.client_ip_address = payload.ip
-  if (payload.userAgent) userData.client_user_agent = payload.userAgent
-
-  const body = {
-    data: [
-      {
+async function sendMeta(pixel: PixelConfig, order: OrderData) {
+  const url = `https://graph.facebook.com/v19.0/${pixel.pixel_id}/events?access_token=${pixel.access_token}`
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      data: [{
         event_name: 'Purchase',
-        event_time: eventTime,
+        event_time: Math.floor(Date.now() / 1000),
         action_source: 'website',
-        event_source_url: payload.pageUrl,
-        user_data: userData,
+        user_data: { em: order.email ? [order.email] : [] },
         custom_data: {
-          currency: payload.currency,
-          value: payload.amount,
-          order_id: payload.orderId,
+          currency: order.currency,
+          value: order.amount,
+          order_id: order.orderId,
         },
-      },
-    ],
-  }
-
-  const url = `https://graph.facebook.com/v20.0/${pixel.pixel_id}/events?access_token=${pixel.access_token}`
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+      }],
+    }),
   })
-
-  if (!res.ok) {
-    const err = await res.text()
-    throw new Error(`Meta CAPI ${res.status}: ${err}`)
-  }
+  if (!res.ok) throw new Error(`Meta API ${res.status}: ${await res.text()}`)
+  return res.json()
 }
 
-// ── Google Analytics 4 Measurement Protocol ──────────────────────────────────
-// pixel_id   = Measurement ID  (G-XXXXXXXX)
-// access_token = API Secret (depuis GA4 Admin → Data Streams → Measurement Protocol API secrets)
-async function fireGoogleConversion(
-  pixel: PixelConfig,
-  payload: ConversionPayload
-): Promise<void> {
-  // client_id obligatoire — on utilise le gclid ou un fallback
-  const clientId = payload.clickIds.gclid ?? `server.${payload.orderId}`
-
-  const body = {
-    client_id: clientId,
-    events: [
-      {
-        name: 'purchase',
-        params: {
-          currency: payload.currency,
-          value: payload.amount,
-          transaction_id: payload.orderId,
-          ...(payload.clickIds.gclid ? { gclid: payload.clickIds.gclid } : {}),
-        },
-      },
-    ],
-  }
-
-  const url = `https://www.google-analytics.com/mp/collect?measurement_id=${pixel.pixel_id}&api_secret=${pixel.access_token}`
-  const res = await fetch(url, {
+async function sendTikTok(pixel: PixelConfig, order: OrderData) {
+  const res = await fetch('https://business-api.tiktok.com/open_api/v1.3/event/track/', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    headers: {
+      'Content-Type': 'application/json',
+      'Access-Token': pixel.access_token,
+    },
+    body: JSON.stringify({
+      pixel_code: pixel.pixel_id,
+      event: 'PlaceAnOrder',
+      timestamp: new Date().toISOString(),
+      context: { user: { email: order.email } },
+      properties: {
+        order_id: order.orderId,
+        currency: order.currency,
+        value: order.amount,
+      },
+    }),
   })
-
-  // GA4 MP retourne toujours 204, on vérifie quand même
-  if (!res.ok) {
-    const err = await res.text()
-    throw new Error(`Google GA4 MP ${res.status}: ${err}`)
-  }
+  if (!res.ok) throw new Error(`TikTok API ${res.status}: ${await res.text()}`)
+  return res.json()
 }
 
-// ── TikTok Events API ─────────────────────────────────────────────────────────
-async function fireTikTokConversion(
-  pixel: PixelConfig,
-  payload: ConversionPayload
-): Promise<void> {
-  const body = {
-    pixel_code: pixel.pixel_id,
-    event: 'PlaceAnOrder',
-    event_id: payload.orderId,
-    timestamp: new Date().toISOString(),
-    context: {
-      user_agent: payload.userAgent ?? '',
-      ip: payload.ip ?? '',
-      page: { url: payload.pageUrl ?? '' },
-      ...(payload.clickIds.ttclid ? { ad: { callback: payload.clickIds.ttclid } } : {}),
-    },
-    properties: {
-      currency: payload.currency,
-      value: payload.amount,
-      order_id: payload.orderId,
-    },
-  }
-
+async function sendGoogle(pixel: PixelConfig, order: OrderData) {
   const res = await fetch(
-    'https://business-api.tiktok.com/open_api/v1.3/pixel/track/',
+    `https://www.google-analytics.com/mp/collect?measurement_id=${pixel.pixel_id}&api_secret=${pixel.access_token}`,
     {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Access-Token': pixel.access_token,
-      },
-      body: JSON.stringify(body),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        client_id: order.checkoutToken || order.orderId,
+        events: [{
+          name: 'purchase',
+          params: {
+            transaction_id: order.orderId,
+            value: order.amount,
+            currency: order.currency,
+          },
+        }],
+      }),
     }
   )
-
-  if (!res.ok) {
-    const err = await res.text()
-    throw new Error(`TikTok Events API ${res.status}: ${err}`)
-  }
-
-  const data = await res.json()
-  if (data.code !== 0) {
-    throw new Error(`TikTok Events API error code ${data.code}: ${data.message}`)
-  }
+  if (!res.ok) throw new Error(`Google API ${res.status}: ${await res.text()}`)
 }
 
-// ── Snapchat Conversions API ──────────────────────────────────────────────────
-async function fireSnapchatConversion(
-  pixel: PixelConfig,
-  payload: ConversionPayload
-): Promise<void> {
-  const body = {
-    pixel_id: pixel.pixel_id,
-    event_type: 'PURCHASE',
-    event_conversion_type: 'WEB',
-    timestamp_micro: Date.now() * 1000,
-    hashed_email: '',    // optionnel (email hashé SHA-256)
-    price_micro: Math.round(payload.amount * 1_000_000),
-    currency: payload.currency,
-    transaction_id: payload.orderId,
-    ...(payload.clickIds.ScCid ? { click_id: payload.clickIds.ScCid } : {}),
-    ...(payload.ip ? { ip_address: payload.ip } : {}),
-    ...(payload.userAgent ? { user_agent: payload.userAgent } : {}),
-  }
-
+async function sendSnapchat(pixel: PixelConfig, order: OrderData) {
   const res = await fetch('https://tr.snapchat.com/v2/conversion', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${pixel.access_token}`,
+      'Authorization': `Bearer ${pixel.access_token}`,
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify({
+      pixel_id: pixel.pixel_id,
+      event_type: 'PURCHASE',
+      event_conversion_type: 'WEB',
+      timestamp: Date.now(),
+      order_id: order.orderId,
+      price: order.amount,
+      currency: order.currency,
+    }),
   })
-
-  if (!res.ok) {
-    const err = await res.text()
-    throw new Error(`Snapchat CAPI ${res.status}: ${err}`)
-  }
+  if (!res.ok) throw new Error(`Snapchat API ${res.status}: ${await res.text()}`)
+  return res.json()
 }
 
-// ── Dispatcher principal ──────────────────────────────────────────────────────
-/**
- * Fire les conversions vers toutes les plateformes configurées.
- * En cas d'échec d'une plateforme, logue l'erreur et continue.
- */
-export async function fireAllConversions(
-  pixels: PixelConfig[],
-  payload: ConversionPayload
-): Promise<void> {
-  const dispatchers: Record<string, (p: PixelConfig, d: ConversionPayload) => Promise<void>> = {
-    meta: fireMetaConversion,
-    google: fireGoogleConversion,
-    tiktok: fireTikTokConversion,
-    snapchat: fireSnapchatConversion,
+export async function sendConversionEvents(pixels: PixelConfig[], order: OrderData) {
+  const senders: Record<string, (p: PixelConfig, o: OrderData) => Promise<unknown>> = {
+    meta: sendMeta,
+    tiktok: sendTikTok,
+    google: sendGoogle,
+    snapchat: sendSnapchat,
   }
 
   await Promise.allSettled(
-    pixels.map(async pixel => {
-      const fn = dispatchers[pixel.platform]
-      if (!fn) return
-
+    pixels.map(async (pixel) => {
+      const sender = senders[pixel.platform]
+      if (!sender) return
       try {
-        await fn(pixel, payload)
-        console.log(`[Conversions] ✓ ${pixel.platform} fired for order ${payload.orderId}`)
+        await sender(pixel, order)
+        console.log(`[Pixel] ${pixel.platform} Purchase sent for order ${order.orderId}`)
       } catch (err) {
-        // Logue l'erreur et continue — ne bloque pas les autres plateformes
-        console.error(`[Conversions] ✗ ${pixel.platform} failed for order ${payload.orderId}:`, err)
+        console.error(`[Pixel] ${pixel.platform} failed for order ${order.orderId}:`, err)
       }
     })
   )

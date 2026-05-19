@@ -177,7 +177,7 @@ export default function PixelsPage() {
                         disabled={deleting === platform.id}
                       >
                         {deleting === platform.id ? '...' : 'Supprimer'}
-                      </</button>
+                      </button>
                     )}
                   </div>
 

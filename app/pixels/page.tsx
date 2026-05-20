@@ -188,14 +188,16 @@ export default function PixelsPage() {
                     </div>
                     {isConnected && (
                       <div style={{ display: 'flex', gap: '8px' }}>
-                        <button
-                          className="btn btn-ghost"
-                          style={{ padding: '4px 10px', fontSize: '12px' }}
-                          onClick={() => handleTest(platform.id)}
-                          disabled={testing === platform.id}
-                        >
-                          {testing === platform.id ? 'Test...' : 'Tester'}
-                        </button>
+                        {platform.id !== 'google' && (
+                          <button
+                            className="btn btn-ghost"
+                            style={{ padding: '4px 10px', fontSize: '12px' }}
+                            onClick={() => handleTest(platform.id)}
+                            disabled={testing === platform.id}
+                          >
+                            {testing === platform.id ? 'Test...' : 'Tester'}
+                          </button>
+                        )}
                         <button
                           className="btn btn-danger"
                           style={{ padding: '4px 10px', fontSize: '12px' }}

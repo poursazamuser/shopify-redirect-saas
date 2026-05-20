@@ -18,7 +18,7 @@ const PLATFORMS = [
     icon: '🔵',
     pixelLabel: 'Measurement ID (G-XXXXXXXX)',
     tokenLabel: 'API Secret',
-    help: 'Google Analytics → Admin → Flux de données → Secrets d\'API pour Measurement Protocol',
+    help: "Google Analytics → Admin → Flux de données → Secrets d'API pour Measurement Protocol",
   },
   {
     id: 'tiktok',
@@ -50,8 +50,10 @@ export default function PixelsPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
+  const [testing, setTesting] = useState<string | null>(null)
   const [forms, setForms] = useState<Record<string, { pixel_id: string; access_token: string }>>({})
   const [messages, setMessages] = useState<Record<string, { type: 'success' | 'error'; text: string }>>({})
+  const [testResults, setTestResults] = useState<Record<string, { ok: boolean; message: string }>>({})
 
   const loadPixels = useCallback(async () => {
     const res = await fetch('/api/pixels')
@@ -89,7 +91,7 @@ export default function PixelsPage() {
     })
     setSaving(null)
     if (res.ok) {
-      setMessage(platform, 'success', '✓ Pixel enregistré')
+      setMessage(platform, 'success', 'Pixel enregistré')
       setForms(prev => ({ ...prev, [platform]: { pixel_id: '', access_token: '' } }))
       loadPixels()
     } else {
@@ -99,7 +101,7 @@ export default function PixelsPage() {
   }
 
   async function handleDelete(platform: string) {
-    if (!confirm(`Supprimer le pixel ${platform} ?`)) return
+    if (!confirm('Supprimer ce pixel ?')) return
     setDeleting(platform)
     await fetch('/api/pixels', {
       method: 'DELETE',
@@ -107,7 +109,21 @@ export default function PixelsPage() {
       body: JSON.stringify({ platform }),
     })
     setDeleting(null)
+    setTestResults(prev => { const n = { ...prev }; delete n[platform]; return n })
     loadPixels()
+  }
+
+  async function handleTest(platform: string) {
+    setTesting(platform)
+    setTestResults(prev => { const n = { ...prev }; delete n[platform]; return n })
+    const res = await fetch('/api/pixels/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ platform }),
+    })
+    const data = await res.json()
+    setTesting(null)
+    setTestResults(prev => ({ ...prev, [platform]: { ok: data.ok, message: data.message || data.error } }))
   }
 
   const connectedPlatforms = new Set(pixels.map(p => p.platform))
@@ -143,9 +159,9 @@ export default function PixelsPage() {
 
       <main style={{ maxWidth: '900px', margin: '0 auto', padding: '40px 24px' }}>
         <div style={{ marginBottom: '32px' }}>
-          <h1 style={{ fontSize: '28px', fontWeight: '700', marginBottom: '8px' }}>Pixels & Conversions</h1>
+          <h1 style={{ fontSize: '28px', fontWeight: '700', marginBottom: '8px' }}>Pixels et Conversions</h1>
           <p style={{ color: '#6b6b8a' }}>
-            Les événements d'achat sont envoyés automatiquement via Conversions API dès réception du paiement sur la boutique B.
+            Les achats sur la boutique B sont envoyés automatiquement via Conversions API à chaque plateforme configurée.
           </p>
         </div>
 
@@ -156,6 +172,7 @@ export default function PixelsPage() {
               const pixel = pixels.find(p => p.platform === platform.id)
               const form = getForm(platform.id)
               const msg = messages[platform.id]
+              const testResult = testResults[platform.id]
 
               return (
                 <div key={platform.id} className="card">
@@ -165,21 +182,43 @@ export default function PixelsPage() {
                       <h2 style={{ fontSize: '15px', fontWeight: '600' }}>{platform.label}</h2>
                       {isConnected && (
                         <span style={{ fontSize: '12px', color: '#4ade80' }}>
-                          ✓ Connecté — Pixel ID : {pixel?.pixel_id}
+                          Connecté — Pixel ID : {pixel?.pixel_id}
                         </span>
                       )}
                     </div>
                     {isConnected && (
-                      <button
-                        className="btn btn-danger"
-                        style={{ padding: '4px 10px', fontSize: '12px' }}
-                        onClick={() => handleDelete(platform.id)}
-                        disabled={deleting === platform.id}
-                      >
-                        {deleting === platform.id ? '...' : 'Supprimer'}
-                      </button>
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <button
+                          className="btn btn-ghost"
+                          style={{ padding: '4px 10px', fontSize: '12px' }}
+                          onClick={() => handleTest(platform.id)}
+                          disabled={testing === platform.id}
+                        >
+                          {testing === platform.id ? 'Test...' : 'Tester'}
+                        </button>
+                        <button
+                          className="btn btn-danger"
+                          style={{ padding: '4px 10px', fontSize: '12px' }}
+                          onClick={() => handleDelete(platform.id)}
+                          disabled={deleting === platform.id}
+                        >
+                          {deleting === platform.id ? '...' : 'Supprimer'}
+                        </button>
+                      </div>
                     )}
                   </div>
+
+                  {testResult && (
+                    <div style={{
+                      padding: '10px 14px', borderRadius: '8px', marginBottom: '12px',
+                      background: testResult.ok ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)',
+                      border: testResult.ok ? '1px solid rgba(34,197,94,0.3)' : '1px solid rgba(239,68,68,0.3)',
+                      fontSize: '13px',
+                      color: testResult.ok ? '#4ade80' : '#f87171',
+                    }}>
+                      {testResult.message}
+                    </div>
+                  )}
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                     <div>
@@ -189,7 +228,7 @@ export default function PixelsPage() {
                         type="text"
                         value={form.pixel_id}
                         onChange={e => setForm(platform.id, 'pixel_id', e.target.value)}
-                        placeholder={isConnected ? '••••• (laisser vide pour ne pas changer)' : platform.pixelLabel}
+                        placeholder={isConnected ? 'Laisser vide pour ne pas changer' : platform.pixelLabel}
                       />
                     </div>
                     <div>
@@ -209,7 +248,7 @@ export default function PixelsPage() {
                       background: 'rgba(108,71,255,0.06)', border: '1px solid rgba(108,71,255,0.15)',
                       fontSize: '12px', color: '#a5b4fc',
                     }}>
-                      💡 {platform.help}
+                      {platform.help}
                     </div>
 
                     {msg && (
@@ -224,7 +263,7 @@ export default function PixelsPage() {
                       onClick={() => handleSave(platform.id)}
                       disabled={saving === platform.id}
                     >
-                      {saving === platform.id ? 'Enregistrement...' : isConnected ? '↺ Mettre à jour' : 'Connecter'}
+                      {saving === platform.id ? 'Enregistrement...' : isConnected ? 'Mettre à jour' : 'Connecter'}
                     </button>
                   </div>
                 </div>

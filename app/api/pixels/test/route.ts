@@ -28,11 +28,13 @@ async function testTikTok(pixel_id: string, access_token: string): Promise<strin
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Access-Token': access_token },
     body: JSON.stringify({
-      pixel_code: pixel_id,
-      event: 'PlaceAnOrder',
-      timestamp: new Date().toISOString(),
-      context: {},
-      properties: { order_id: 'test_' + Date.now(), currency: 'EUR', value: 0.01 },
+      event_source: 'web',
+      event_source_id: pixel_id,
+      data: [{
+        event: 'PlaceAnOrder',
+        event_time: Math.floor(Date.now() / 1000),
+        properties: { order_id: 'test_' + String(Date.now()), currency: 'EUR', value: 0.01 },
+      }],
     }),
   })
   const data = await res.json()
@@ -56,7 +58,7 @@ async function testGoogle(pixel_id: string, access_token: string): Promise<strin
   const errors = data?.validationMessages?.filter((m: {severity: string}) => m.severity === 'ERROR')
   if (errors?.length > 0) return `Erreur Google : ${errors[0].description}`
   if (!res.ok) return `Erreur Google : ${res.status}`
-  return 'ok'
+  return 'warning'
 }
 
 async function testSnapchat(pixel_id: string, access_token: string): Promise<string> {
@@ -67,14 +69,16 @@ async function testSnapchat(pixel_id: string, access_token: string): Promise<str
       pixel_id,
       event_type: 'PURCHASE',
       event_conversion_type: 'WEB',
-      timestamp: Date.now(),
-      order_id: 'test_' + Date.now(),
-      price: 0.01,
+      timestamp: Math.floor(Date.now() / 1000),
+      hashed_email: '',
+      uuid_c1: 'test_' + Date.now(),
+      price: '0.01',
       currency: 'EUR',
+      transaction_id: 'test_' + Date.now(),
     }),
   })
   const data = await res.json()
-  if (!res.ok) return `Erreur Snapchat : ${data?.error_message || res.status}`
+  if (!res.ok) return `Erreur Snapchat : ${data?.error_message || JSON.stringify(data) || res.status}`
   return 'ok'
 }
 
@@ -109,6 +113,8 @@ export async function POST(req: NextRequest) {
     const result = await tester(pixel.pixel_id, pixel.access_token)
     if (result === 'ok') {
       return NextResponse.json({ ok: true, message: '✓ Connexion réussie' })
+    } else if (result === 'warning') {
+      return NextResponse.json({ ok: true, message: '⚠ Requête envoyée — Google ne permet pas de valider les credentials côté serveur. Vérifiez dans votre tableau de bord GA4.' })
     } else {
       return NextResponse.json({ ok: false, message: result })
     }

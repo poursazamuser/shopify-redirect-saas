@@ -62,6 +62,12 @@ async function testGoogle(pixel_id: string, access_token: string): Promise<strin
 }
 
 async function testSnapchat(pixel_id: string, access_token: string): Promise<string> {
+  // Snapchat requires a valid UUID and at least one hashed user identifier
+  const crypto = await import('crypto')
+  const testEmail = 'test@example.com'
+  const hashedEmail = crypto.createHash('sha256').update(testEmail).digest('hex')
+  const testUuid = crypto.randomUUID()
+
   const res = await fetch('https://tr.snapchat.com/v2/conversion', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${access_token}` },
@@ -70,15 +76,16 @@ async function testSnapchat(pixel_id: string, access_token: string): Promise<str
       event_type: 'PURCHASE',
       event_conversion_type: 'WEB',
       timestamp: Math.floor(Date.now() / 1000),
-      hashed_email: '',
-      uuid_c1: 'test_' + Date.now(),
+      hashed_email: hashedEmail,
+      uuid_c1: testUuid,
       price: '0.01',
       currency: 'EUR',
       transaction_id: 'test_' + Date.now(),
     }),
   })
   const data = await res.json()
-  if (!res.ok) return `Erreur Snapchat : ${data?.error_message || JSON.stringify(data) || res.status}`
+  if (data?.status === 'FAILED') return `Erreur Snapchat : ${data?.reason || JSON.stringify(data)}`
+  if (!res.ok) return `Erreur Snapchat : ${res.status}`
   return 'ok'
 }
 

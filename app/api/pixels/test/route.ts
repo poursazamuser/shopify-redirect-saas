@@ -4,6 +4,8 @@ import { supabaseAdmin } from '@/lib/supabase'
 
 async function testMeta(pixel_id: string, access_token: string): Promise<string> {
   const url = `https://graph.facebook.com/v19.0/${pixel_id}/events?access_token=${access_token}`
+  const crypto = await import('crypto')
+  const hashedEmail = crypto.createHash('sha256').update('test@example.com').digest('hex')
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -12,14 +14,21 @@ async function testMeta(pixel_id: string, access_token: string): Promise<string>
         event_name: 'Purchase',
         event_time: Math.floor(Date.now() / 1000),
         action_source: 'website',
-        user_data: { em: [] },
-        custom_data: { currency: 'EUR', value: 0.01, order_id: 'test_' + Date.now() },
+        user_data: {
+          em: [hashedEmail],
+          client_ip_address: '127.0.0.1',
+          client_user_agent: 'Mozilla/5.0',
+        },
+        custom_data: {
+          currency: 'EUR',
+          value: 0.01,
+        },
       }],
-      test_event_code: 'TEST',
     }),
   })
   const data = await res.json()
-  if (!res.ok) return `Erreur Meta : ${data?.error?.message || res.status}`
+  if (data?.error) return `Erreur Meta : ${data.error.message || JSON.stringify(data.error)}`
+  if (!res.ok) return `Erreur Meta : ${res.status}`
   return 'ok'
 }
 
